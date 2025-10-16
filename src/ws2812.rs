@@ -32,25 +32,27 @@ where
         rmt::Pulse::new_with_duration(ticks_hz, rmt::PinState::Low, &Duration::from_nanos(600))?,
     );
 
-    let mut signal = FixedLengthSignal::<24>::new();
-    let color = 0xFF_00_00;
+    let mut color = 0x00_00_00;
 
     loop {
-        encode_color(&mut signal, color, t0h, t0l, t1h, t1l)?;
-        tx.start_blocking(&signal)?;
-        info!("frame sent");
+        color += 0xFF;
+        if let Ok(signal) = encode_color(color, t0h, t0l, t1h, t1l) {
+            tx.start_blocking(&signal)?;
+            info!("frame sent {:x}", color);
+        }
         FreeRtos::delay_ms(1000);
     }
 }
 
 fn encode_color(
-    signal: &mut FixedLengthSignal<24>,
     code: u32,
     t0h: rmt::Pulse,
     t0l: rmt::Pulse,
     t1h: rmt::Pulse,
     t1l: rmt::Pulse,
-) -> Result<()> {
+) -> Result<FixedLengthSignal<24>> {
+    let mut signal = FixedLengthSignal::<24>::new();
+
     for i in (0..24).rev() {
         let p = 1_u32 << i;
         let bit_set = p & code != 0;
@@ -58,5 +60,5 @@ fn encode_color(
         signal.set(23 - i as usize, &(high_pulse, low_pulse))?;
     }
 
-    Ok(())
+    Ok(signal)
 }
