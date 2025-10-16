@@ -1,11 +1,11 @@
 use anyhow::Result;
-use esp_idf_hal::rmt;
+use esp_idf_hal::{delay, rmt};
 use log::info;
 
 pub fn ws2812_task(rmt: rmt::TxRmtDriver) -> Result<()>
 where
 {
-    use neopixel::{self, Rgb};
+    use neopixel::{self, FrameQueue, Rgb};
 
     info!("Init ws2812_task");
 
@@ -17,7 +17,14 @@ where
         Rgb::new(0, 255, 0),
     ];
 
-    ledstrip.transmit(&pixels)?;
+    let queue: FrameQueue<16> = neopixel::new_frame_queue(4);
+
+    neopixel::enqueue_frame(&queue, &pixels, delay::NON_BLOCK)?;
+
+    if let Some((frame, _)) = neopixel::dequeue_frame(&queue, delay::NON_BLOCK) {
+        ledstrip.transmit_frame(&frame)?;
+        let _ = frame.len();
+    }
 
     Ok(())
 }
@@ -248,5 +255,12 @@ pub mod neopixel {
         queue
             .send_back(Frame::from_slice(pixels), timeout)
             .map_err(Into::into)
+    }
+
+    pub fn dequeue_frame<const N: usize>(
+        queue: &FrameQueue<N>,
+        timeout: delay::TickType_t,
+    ) -> Option<(Frame<N>, bool)> {
+        queue.recv_front(timeout)
     }
 }
