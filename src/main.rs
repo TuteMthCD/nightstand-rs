@@ -1,13 +1,18 @@
 mod ws2812;
+use crate::ws2812::ws2812_task;
 
 use anyhow::{anyhow, Result};
-use esp_idf_hal::gpio::{Output, OutputPin};
+
+use esp_idf_hal::{
+    gpio::{Output, OutputPin},
+    rmt,
+};
+
+use esp_idf_svc::{
+    hal::{self, delay::FreeRtos},
+    log::{set_target_level, EspLogger},
+};
 use log::{info, LevelFilter};
-
-use esp_idf_svc::hal::{self, delay::FreeRtos};
-use esp_idf_svc::log::{set_target_level, EspLogger};
-
-use crate::ws2812::ws2812_task;
 
 // const SSID: &str = env!("WIFI_SSID");
 // const PASSWORD: &str = env!("WIFI_PASS");
@@ -31,7 +36,11 @@ fn main() -> Result<()> {
     std::thread::Builder::new()
         .name("ws2812".to_string())
         .stack_size(1024 * 32)
-        .spawn(move || ws2812_task(channel0, ws_pin))?;
+        .spawn(move || {
+            let conf = rmt::TxRmtConfig::new().clock_divider(1);
+            let rmt = rmt::TxRmtDriver::new(channel0, ws_pin, &conf).unwrap();
+            ws2812_task(rmt).unwrap();
+        })?;
 
     std::thread::Builder::new()
         .name("wifi".to_string())

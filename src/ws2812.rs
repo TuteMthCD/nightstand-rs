@@ -1,22 +1,11 @@
 use anyhow::Result;
-use esp_idf_hal::{
-    gpio::OutputPin,
-    peripheral::Peripheral,
-    rmt::{self, RmtChannel},
-};
+use esp_idf_hal::rmt;
 use log::info;
 
-pub fn ws2812_task<C, CH, P, PIN>(channel: CH, pin: PIN) -> Result<()>
+pub fn ws2812_task(rmt: rmt::TxRmtDriver) -> Result<()>
 where
-    C: RmtChannel,
-    CH: Peripheral<P = C>,
-    P: OutputPin,
-    PIN: Peripheral<P = P>,
 {
     info!("Init ws2812_task");
-    let conf = rmt::TxRmtConfig::new().clock_divider(1);
-
-    let rmt = rmt::TxRmtDriver::new(channel, pin, &conf)?;
 
     let mut ledstrip = neopixel::Ws2812::new(rmt)?;
 
