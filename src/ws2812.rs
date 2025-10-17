@@ -2,11 +2,9 @@ use anyhow::Result;
 use esp_idf_hal::{delay, rmt};
 use log::info;
 
-pub fn ws2812_task(rmt: rmt::TxRmtDriver) -> Result<()>
-where
-{
-    use neopixel::{self, FrameQueue, Rgb};
+use crate::ws2812::neopixel::Rgb;
 
+pub fn ws2812_task(rmt: rmt::TxRmtDriver) -> Result<()> {
     info!("Init ws2812_task");
 
     let mut ledstrip = neopixel::Ws2812::new(rmt)?;
@@ -15,27 +13,28 @@ where
         Rgb::new(255, 255, 255),
         Rgb::new(255, 0, 0),
         Rgb::new(0, 255, 0),
+        Rgb::new(0, 0, 255),
+        Rgb::new(255, 255, 255),
+        Rgb::new(255, 0, 0),
+        Rgb::new(0, 255, 0),
+        Rgb::new(0, 0, 255),
+        Rgb::new(255, 255, 255),
+        Rgb::new(255, 0, 0),
+        Rgb::new(0, 255, 0),
+        Rgb::new(0, 0, 255),
+        Rgb::new(255, 255, 255),
+        Rgb::new(255, 0, 0),
+        Rgb::new(0, 255, 0),
+        Rgb::new(0, 0, 255),
     ];
 
-    let queue: FrameQueue<16> = neopixel::new_frame_queue(4);
-
-    neopixel::enqueue_frame(&queue, &pixels, delay::NON_BLOCK)?;
-
-    if let Some((frame, _)) = neopixel::dequeue_frame(&queue, delay::NON_BLOCK) {
-        ledstrip.transmit_frame(&frame)?;
-        let _ = frame.len();
-    }
-
-    Ok(())
+    ledstrip.transmit(&pixels)
 }
 
 pub mod neopixel {
+
     use anyhow::{bail, Result};
-    use esp_idf_hal::{
-        delay,
-        rmt::{self, TxRmtDriver, VariableLengthSignal},
-        task::queue::Queue,
-    };
+    use esp_idf_hal::rmt::{self, TxRmtDriver, VariableLengthSignal};
 
     struct Timings {
         t0h: rmt::Pulse,
@@ -128,25 +127,6 @@ pub mod neopixel {
 
             Ok(res)
         }
-
-        #[allow(dead_code)]
-        pub fn transmit_frame<const N: usize>(&mut self, frame: &Frame<N>) -> Result<()> {
-            self.transmit(frame.as_slice())
-        }
-
-        #[allow(dead_code)]
-        pub fn dequeue_and_transmit<const N: usize>(
-            &mut self,
-            queue: &FrameQueue<N>,
-            timeout: delay::TickType_t,
-        ) -> Result<bool> {
-            if let Some((frame, _hp_awoken)) = queue.recv_front(timeout) {
-                self.transmit_frame(&frame)?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        }
     }
 
     #[derive(Clone, Copy)]
@@ -188,11 +168,6 @@ pub mod neopixel {
 
     impl From<&Rgb> for u32 {
         /// Convert RGB to u32 color value
-        ///
-        /// e.g. rgb: (1,2,4)
-        /// G        R        B
-        /// 7      0 7      0 7      0
-        /// 00000010 00000001 00000100
         fn from(rgb: &Rgb) -> Self {
             ((rgb.g as u32) << 16) | ((rgb.r as u32) << 8) | rgb.b as u32
         }
@@ -235,32 +210,5 @@ pub mod neopixel {
         pub fn as_slice(&self) -> &[Rgb] {
             &self.data[..self.len as usize]
         }
-
-        pub fn len(&self) -> usize {
-            self.len as usize
-        }
-    }
-
-    pub type FrameQueue<const N: usize> = Queue<Frame<N>>;
-
-    pub fn new_frame_queue<const N: usize>(depth: usize) -> FrameQueue<N> {
-        Queue::new(depth)
-    }
-
-    pub fn enqueue_frame<const N: usize>(
-        queue: &FrameQueue<N>,
-        pixels: &[Rgb],
-        timeout: delay::TickType_t,
-    ) -> Result<bool> {
-        queue
-            .send_back(Frame::from_slice(pixels), timeout)
-            .map_err(Into::into)
-    }
-
-    pub fn dequeue_frame<const N: usize>(
-        queue: &FrameQueue<N>,
-        timeout: delay::TickType_t,
-    ) -> Option<(Frame<N>, bool)> {
-        queue.recv_front(timeout)
     }
 }
