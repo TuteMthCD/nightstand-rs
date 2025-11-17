@@ -170,5 +170,4 @@ pub mod neopixel {
             (&rgb).into()
         }
     }
-
 }

@@ -1,5 +1,6 @@
+mod wifi;
 mod ws2812;
-use crate::ws2812::ws2812_task;
+use crate::{wifi::connect_wifi, ws2812::ws2812_task};
 
 use anyhow::{anyhow, Result};
 
@@ -14,16 +15,17 @@ use esp_idf_svc::{
 };
 use log::{error, info, LevelFilter};
 
-// const SSID: &str = env!("WIFI_SSID");
-// const PASSWORD: &str = env!("WIFI_PASS");
+const SSID: &str = env!("WIFI_SSID");
+const PASSWORD: &str = env!("WIFI_PASS");
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     EspLogger::initialize_default();
     set_target_level("*", LevelFilter::Info)?;
 
-    let hal::peripherals::Peripherals { rmt, pins, .. } =
-        hal::peripherals::Peripherals::take().unwrap();
+    let hal::peripherals::Peripherals {
+        rmt, pins, modem, ..
+    } = hal::peripherals::Peripherals::take().unwrap();
 
     let hal::rmt::RMT { channel0, .. } = rmt;
 
@@ -46,6 +48,17 @@ fn main() -> Result<()> {
 
             if let Err(err) = worker() {
                 error!("ws2812 task exited with error: {err:?}");
+            }
+        })?;
+
+    std::thread::Builder::new()
+        .name("wifi".to_string())
+        .stack_size(1024 * 16)
+        .spawn(move || {
+            let worker = || -> Result<()> { connect_wifi(modem, SSID, PASSWORD) };
+
+            if let Err(err) = worker() {
+                error!("wifi task exited with error: {err:?}");
             }
         })?;
 
