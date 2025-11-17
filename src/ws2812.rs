@@ -1,5 +1,5 @@
 use anyhow::Result;
-use esp_idf_hal::{delay, rmt};
+use esp_idf_hal::{delay::FreeRtos, rmt};
 use log::info;
 
 use crate::ws2812::neopixel::Rgb;
@@ -9,26 +9,19 @@ pub fn ws2812_task(rmt: rmt::TxRmtDriver) -> Result<()> {
 
     let mut ledstrip = neopixel::Ws2812::new(rmt)?;
 
-    let pixels = vec![
-        Rgb::new(255, 255, 255),
-        Rgb::new(255, 0, 0),
-        Rgb::new(0, 255, 0),
-        Rgb::new(0, 0, 255),
-        Rgb::new(255, 255, 255),
-        Rgb::new(255, 0, 0),
-        Rgb::new(0, 255, 0),
-        Rgb::new(0, 0, 255),
-        Rgb::new(255, 255, 255),
-        Rgb::new(255, 0, 0),
-        Rgb::new(0, 255, 0),
-        Rgb::new(0, 0, 255),
-        Rgb::new(255, 255, 255),
-        Rgb::new(255, 0, 0),
-        Rgb::new(0, 255, 0),
-        Rgb::new(0, 0, 255),
-    ];
+    let mut pixels = vec![Rgb::new(0, 0, 0); 12];
 
-    ledstrip.transmit(&pixels)
+    loop {
+        for i in 0..360 {
+            let color = Rgb::from_hsv(i, 100, 100)?;
+            for pixel in pixels.iter_mut() {
+                *pixel = color;
+            }
+            ledstrip.transmit(&pixels)?;
+
+            FreeRtos::delay_ms(50);
+        }
+    }
 }
 
 pub mod neopixel {
@@ -82,7 +75,7 @@ pub mod neopixel {
                 rst: rmt::Pulse::new_with_duration(
                     ticks_hz,
                     rmt::PinState::Low,
-                    &Duration::from_nanos(50),
+                    &Duration::from_nanos(50_000),
                 )?,
             };
 
@@ -178,37 +171,4 @@ pub mod neopixel {
         }
     }
 
-    #[derive(Clone, Copy)]
-    pub struct Frame<const N: usize> {
-        len: u16,
-        data: [Rgb; N],
-    }
-
-    impl<const N: usize> Frame<N> {
-        pub fn empty() -> Self {
-            Self {
-                len: 0,
-                data: [Rgb::new(0, 0, 0); N],
-            }
-        }
-
-        pub fn from_slice(pixels: &[Rgb]) -> Self {
-            let mut frame = Self::empty();
-            frame.fill_from_slice(pixels);
-            frame
-        }
-
-        pub fn fill_from_slice(&mut self, pixels: &[Rgb]) {
-            let copy_len = pixels.len().min(N);
-            self.data[..copy_len].copy_from_slice(&pixels[..copy_len]);
-            if copy_len < N {
-                self.data[copy_len..].fill(Rgb::new(0, 0, 0));
-            }
-            self.len = copy_len as u16;
-        }
-
-        pub fn as_slice(&self) -> &[Rgb] {
-            &self.data[..self.len as usize]
-        }
-    }
 }

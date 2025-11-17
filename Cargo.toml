@@ -27,7 +27,6 @@ log = "0.4"
 esp-idf-svc = "0.51" 
 esp-idf-hal = { version = "0.45", features = ["rmt-legacy"] }
 anyhow = "1.0.100"
-futures = "0.3.31"
 
 # --- Optional Embassy Integration ---
 # esp-idf-svc = { version = "0.51", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }

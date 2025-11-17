@@ -12,7 +12,7 @@ use esp_idf_svc::{
     hal::{self, delay::FreeRtos},
     log::{set_target_level, EspLogger},
 };
-use log::{info, LevelFilter};
+use log::{error, info, LevelFilter};
 
 // const SSID: &str = env!("WIFI_SSID");
 // const PASSWORD: &str = env!("WIFI_PASS");
@@ -37,15 +37,17 @@ fn main() -> Result<()> {
         .name("ws2812".to_string())
         .stack_size(1024 * 32)
         .spawn(move || {
-            let conf = rmt::TxRmtConfig::new().clock_divider(1);
-            let rmt = rmt::TxRmtDriver::new(channel0, ws_pin, &conf).unwrap();
-            ws2812_task(rmt).unwrap();
-        })?;
+            let worker = || -> Result<()> {
+                let conf = rmt::TxRmtConfig::new().clock_divider(1);
+                let rmt = rmt::TxRmtDriver::new(channel0, ws_pin, &conf)?;
 
-    std::thread::Builder::new()
-        .name("wifi".to_string())
-        .stack_size(4096)
-        .spawn(wifi_task)?;
+                ws2812_task(rmt)
+            };
+
+            if let Err(err) = worker() {
+                error!("ws2812 task exited with error: {err:?}");
+            }
+        })?;
 
     let blink_handle = std::thread::Builder::new()
         .name("blink".to_string())
@@ -61,15 +63,6 @@ fn main() -> Result<()> {
         .map_err(|_| anyhow!("blink thread panicked"))?;
 
     blink_result?;
-
-    Ok(())
-}
-
-#[allow(dead_code)]
-fn wifi_task() -> Result<()> {
-    info!("init wifi task");
-
-    // let nvs = nvs::EspDefaultNvsPartition::take().unwrap();
 
     Ok(())
 }
