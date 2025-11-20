@@ -1,26 +1,33 @@
-use anyhow::Result;
+use std::sync::mpsc::Receiver;
+
+use anyhow::{anyhow, Result};
 use esp_idf_hal::{delay::FreeRtos, rmt};
-use log::info;
+use log::{info, warn};
 
 use crate::ws2812::neopixel::Rgb;
 
-pub fn ws2812_task(rmt: rmt::TxRmtDriver) -> Result<()> {
+pub fn ws2812_task(rmt: rmt::TxRmtDriver, pixel_rx: Receiver<Vec<Rgb>>) -> Result<()> {
     info!("Init ws2812_task");
 
     let mut ledstrip = neopixel::Ws2812::new(rmt)?;
-
-    let mut pixels = vec![Rgb::new(0, 0, 0); 12];
+    let off_buffer = vec![Rgb::new(0, 0, 0); 12];
 
     loop {
-        for i in 0..360 {
-            let color = Rgb::from_hsv(i, 100, 100)?;
-            for pixel in pixels.iter_mut() {
-                *pixel = color;
+        let payload = match pixel_rx.recv() {
+            Ok(pixels) => pixels,
+            Err(err) => {
+                warn!("Pixel channel disconnected: {err:?}");
+                return Err(anyhow!("pixel queue disconnected"));
             }
-            ledstrip.transmit(&pixels)?;
+        };
 
-            FreeRtos::delay_ms(50);
+        if payload.is_empty() {
+            ledstrip.transmit(&off_buffer)?;
+        } else {
+            ledstrip.transmit(&payload)?;
         }
+
+        FreeRtos::delay_ms(50);
     }
 }
 

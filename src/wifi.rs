@@ -1,4 +1,4 @@
-use std::convert::TryInto;
+use std::{convert::TryInto, sync::mpsc::Sender};
 
 use anyhow::{anyhow, Result};
 use embedded_svc::{
@@ -13,11 +13,19 @@ use esp_idf_svc::{
     wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
 };
 use log::{info, warn};
+use serde::Deserialize;
+
+use crate::ws2812::neopixel::Rgb;
 
 const MAX_PARAM_LEN: usize = 512;
 const HTTP_STACK_SIZE: usize = 8192;
 
-pub fn connect_wifi(modem: Modem, ssid: &'static str, password: &'static str) -> Result<()> {
+pub fn connect_wifi(
+    modem: Modem,
+    ssid: &'static str,
+    password: &'static str,
+    pixel_sender: Sender<Vec<Rgb>>,
+) -> Result<()> {
     let sysloop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
@@ -41,7 +49,7 @@ pub fn connect_wifi(modem: Modem, ssid: &'static str, password: &'static str) ->
     info!("Wi-Fi connected to SSID: {ssid}");
 
     let mut server = create_http_server()?;
-    register_http_handlers(&mut server)?;
+    register_http_handlers(&mut server, pixel_sender)?;
 
     info!("HTTP control server ready on port 80");
 
@@ -59,13 +67,18 @@ fn create_http_server() -> Result<EspHttpServer<'static>> {
     Ok(EspHttpServer::new(&config)?)
 }
 
-fn register_http_handlers(server: &mut EspHttpServer<'_>) -> Result<()> {
+fn register_http_handlers(
+    server: &mut EspHttpServer<'_>,
+    pixel_sender: Sender<Vec<Rgb>>,
+) -> Result<()> {
     server.fn_handler::<anyhow::Error, _>("/", Method::Get, |req| {
         req.into_ok_response()?.write_all(b"Nightstand online")?;
         Ok(())
     })?;
 
-    server.fn_handler::<anyhow::Error, _>("/params", Method::Post, |mut req| {
+    let params_sender = pixel_sender.clone();
+
+    server.fn_handler::<anyhow::Error, _>("/params", Method::Post, move |mut req| {
         let mut payload = Vec::new();
 
         if let Some(len) = req.content_len().map(|len| len as usize) {
@@ -93,8 +106,31 @@ fn register_http_handlers(server: &mut EspHttpServer<'_>) -> Result<()> {
         }
 
         match core::str::from_utf8(&payload) {
-            Ok(body) => info!("Received params payload: {body}"),
-            Err(err) => warn!("Received non UTF-8 payload: {err:?}"),
+            Ok(body) => {
+                info!("Received params payload len {}", body.len());
+                match parse_pixels(body) {
+                    Ok(pixels) => {
+                        if let Err(err) = params_sender.send(pixels) {
+                            warn!("Pixel queue disconnected: {err:?}");
+                            req.into_status_response(500)?
+                                .write_all(b"Pixel queue unavailable")?;
+                            return Ok(());
+                        }
+                    }
+                    Err(err) => {
+                        warn!("Invalid pixel payload: {err:?}");
+                        req.into_status_response(400)?
+                            .write_all(b"Invalid pixel payload")?;
+                        return Ok(());
+                    }
+                }
+            }
+            Err(err) => {
+                warn!("Received non UTF-8 payload: {err:?}");
+                req.into_status_response(400)?
+                    .write_all(b"Payload must be UTF-8")?;
+                return Ok(());
+            }
         }
 
         req.into_ok_response()?.write_all(b"{\"status\":\"ok\"}")?;
@@ -103,4 +139,22 @@ fn register_http_handlers(server: &mut EspHttpServer<'_>) -> Result<()> {
     })?;
 
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct PixelInput {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+impl From<PixelInput> for Rgb {
+    fn from(value: PixelInput) -> Self {
+        Rgb::new(value.r, value.g, value.b)
+    }
+}
+
+fn parse_pixels(body: &str) -> Result<Vec<Rgb>> {
+    let parsed: Vec<PixelInput> = serde_json::from_str(body)?;
+    Ok(parsed.into_iter().map(Into::into).collect())
 }

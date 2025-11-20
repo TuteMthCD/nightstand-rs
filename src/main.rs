@@ -23,6 +23,8 @@ fn main() -> Result<()> {
     EspLogger::initialize_default();
     set_target_level("*", LevelFilter::Info)?;
 
+    let (pixel_tx, pixel_rx) = std::sync::mpsc::channel::<Vec<ws2812::neopixel::Rgb>>();
+
     let hal::peripherals::Peripherals {
         rmt, pins, modem, ..
     } = hal::peripherals::Peripherals::take().unwrap();
@@ -43,7 +45,7 @@ fn main() -> Result<()> {
                 let conf = rmt::TxRmtConfig::new().clock_divider(1);
                 let rmt = rmt::TxRmtDriver::new(channel0, ws_pin, &conf)?;
 
-                ws2812_task(rmt)
+                ws2812_task(rmt, pixel_rx)
             };
 
             if let Err(err) = worker() {
@@ -51,11 +53,13 @@ fn main() -> Result<()> {
             }
         })?;
 
+    let wifi_pixels_tx = pixel_tx.clone();
+
     std::thread::Builder::new()
         .name("wifi".to_string())
         .stack_size(1024 * 16)
         .spawn(move || {
-            let worker = || -> Result<()> { connect_wifi(modem, SSID, PASSWORD) };
+            let worker = || -> Result<()> { connect_wifi(modem, SSID, PASSWORD, wifi_pixels_tx) };
 
             if let Err(err) = worker() {
                 error!("wifi task exited with error: {err:?}");
