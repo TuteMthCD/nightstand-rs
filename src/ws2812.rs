@@ -1,7 +1,7 @@
 use std::sync::mpsc::Receiver;
 
 use anyhow::{anyhow, Result};
-use esp_idf_hal::{delay::FreeRtos, rmt};
+use esp_idf_hal::rmt;
 use log::{info, warn};
 
 use crate::ws2812::neopixel::Rgb;
@@ -26,8 +26,6 @@ pub fn ws2812_task(rmt: rmt::TxRmtDriver, pixel_rx: Receiver<Vec<Rgb>>) -> Resul
         } else {
             ledstrip.transmit(&payload)?;
         }
-
-        FreeRtos::delay_ms(50);
     }
 }
 

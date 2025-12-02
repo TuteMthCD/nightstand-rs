@@ -1,10 +1,7 @@
 use std::{convert::TryInto, sync::mpsc::Sender};
 
 use anyhow::{anyhow, Result};
-use embedded_svc::{
-    http::{Headers, Method},
-    io::{Read, Write},
-};
+use embedded_svc::{http::Method, io::Write, ws::FrameType};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::{delay::FreeRtos, modem::Modem},
@@ -76,64 +73,103 @@ fn register_http_handlers(
         Ok(())
     })?;
 
-    let params_sender = pixel_sender.clone();
+    let params_sender = pixel_sender;
 
-    server.fn_handler::<anyhow::Error, _>("/params", Method::Post, move |mut req| {
-        let mut payload = Vec::new();
+    server.ws_handler("/ws", move |ws| {
+        if ws.is_new() {
+            info!("WebSocket session {} opened", ws.session());
+            ws.send(FrameType::Text(false), b"{\"status\":\"ready\"}")?;
+            return Ok(());
+        } else if ws.is_closed() {
+            info!("WebSocket session {} closed", ws.session());
+            return Ok(());
+        }
 
-        if let Some(len) = req.content_len().map(|len| len as usize) {
-            if len > MAX_PARAM_LEN {
-                req.into_status_response(413)? //Content Too Large
-                    .write_all(b"Payload too large")?;
+        let (frame_type, raw_len) = match ws.recv(&mut []) {
+            Ok(meta) => meta,
+            Err(err) => {
+                warn!("Failed to read WebSocket frame metadata: {err:?}");
+                return Err(err);
+            }
+        };
+
+        match frame_type {
+            FrameType::Ping => {
+                ws.send(FrameType::Pong, &[])?;
                 return Ok(());
             }
-            payload.resize(len, 0);
-            req.read_exact(&mut payload)?;
-        } else {
-            let mut chunk = [0u8; 128];
-            loop {
-                let read = req.read(&mut chunk)?;
-                if read == 0 {
-                    break;
+            FrameType::Pong | FrameType::Close | FrameType::SocketClose => {
+                return Ok(());
+            }
+            FrameType::Continue(_) => {
+                warn!("Ignoring fragmented frame from session {}", ws.session());
+                return Ok(());
+            }
+            FrameType::Binary(_) => {
+                if raw_len > 0 {
+                    let mut drain = vec![0u8; raw_len];
+                    ws.recv(&mut drain)?;
                 }
-                if payload.len() + read > MAX_PARAM_LEN {
-                    req.into_status_response(413)?
-                        .write_all(b"Payload too large")?;
+                warn!(
+                    "Binary WebSocket frames not supported (session {})",
+                    ws.session()
+                );
+                ws.send(
+                    FrameType::Text(false),
+                    b"{\"error\":\"binary_not_supported\"}",
+                )?;
+                return Ok(());
+            }
+            FrameType::Text(_) => {}
+        }
+
+        if raw_len == 0 {
+            return Ok(());
+        }
+
+        let payload_len = raw_len.saturating_sub(1);
+
+        if payload_len > MAX_PARAM_LEN {
+            let mut discard = vec![0u8; raw_len];
+            ws.recv(&mut discard)?;
+            warn!("WebSocket payload too large: {} bytes", payload_len);
+            ws.send(FrameType::Text(false), b"{\"error\":\"payload_too_large\"}")?;
+            ws.send(FrameType::Close, &[])?;
+            return Ok(());
+        }
+
+        let mut payload = vec![0u8; raw_len];
+        ws.recv(&mut payload)?;
+
+        let body = match core::str::from_utf8(&payload[..payload_len]) {
+            Ok(body) => body,
+            Err(err) => {
+                warn!("Received non UTF-8 WebSocket payload: {err:?}");
+                ws.send(FrameType::Text(false), b"{\"error\":\"invalid_utf8\"}")?;
+                return Ok(());
+            }
+        };
+
+        info!("Received WebSocket payload len {}", body.len());
+
+        match parse_pixels(body) {
+            Ok(pixels) => {
+                if let Err(err) = params_sender.send(pixels) {
+                    warn!("Pixel queue disconnected: {err:?}");
+                    ws.send(
+                        FrameType::Text(false),
+                        b"{\"error\":\"pixel_queue_unavailable\"}",
+                    )?;
+                    ws.send(FrameType::Close, &[])?;
                     return Ok(());
                 }
-                payload.extend_from_slice(&chunk[..read]);
-            }
-        }
-
-        match core::str::from_utf8(&payload) {
-            Ok(body) => {
-                info!("Received params payload len {}", body.len());
-                match parse_pixels(body) {
-                    Ok(pixels) => {
-                        if let Err(err) = params_sender.send(pixels) {
-                            warn!("Pixel queue disconnected: {err:?}");
-                            req.into_status_response(500)?
-                                .write_all(b"Pixel queue unavailable")?;
-                            return Ok(());
-                        }
-                    }
-                    Err(err) => {
-                        warn!("Invalid pixel payload: {err:?}");
-                        req.into_status_response(400)?
-                            .write_all(b"Invalid pixel payload")?;
-                        return Ok(());
-                    }
-                }
+                ws.send(FrameType::Text(false), b"{\"status\":\"ok\"}")?;
             }
             Err(err) => {
-                warn!("Received non UTF-8 payload: {err:?}");
-                req.into_status_response(400)?
-                    .write_all(b"Payload must be UTF-8")?;
-                return Ok(());
+                warn!("Invalid pixel payload: {err:?}");
+                ws.send(FrameType::Text(false), b"{\"error\":\"invalid_payload\"}")?;
             }
         }
-
-        req.into_ok_response()?.write_all(b"{\"status\":\"ok\"}")?;
 
         Ok(())
     })?;
